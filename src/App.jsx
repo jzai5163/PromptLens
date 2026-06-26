@@ -530,7 +530,7 @@ Respond with ONLY valid JSON, no markdown:
     try {
       const res = await fetch("https://promptlens-api.jaed-prompt.workers.dev", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 3000, messages: [{ role: "user", content }] }),
+        body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 3000, messages: [{ role: "user", content }] }),
       });
       if (!res.ok) {
         const code = res.status;
