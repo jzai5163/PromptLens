@@ -412,6 +412,14 @@ export default function PromptLens() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
+  // 만들기 탭 상태
+  const [makeTool, setMakeTool] = useState("nano");
+  const [makeDesc, setMakeDesc] = useState("");
+  const [makePhoto, setMakePhoto] = useState(null);
+  const [makeLoading, setMakeLoading] = useState(false);
+  const [makeResult, setMakeResult] = useState(null);
+  const [makeError, setMakeError] = useState(null);
+  const makeFileRef = useRef();
 
   const ready = mode === "single" ? !!single : mode === "ba" ? !!before && !!after : !!video;
 
@@ -528,9 +536,9 @@ Respond with ONLY valid JSON, no markdown:
       content.push({ type: "text", text: sys });
     }
     try {
-      const res = await fetch("https://promptlens-api.jaed-prompt.workers.dev", {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 3000, messages: [{ role: "user", content }] }),
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 3000, messages: [{ role: "user", content }] }),
       });
       if (!res.ok) {
         const code = res.status;
@@ -651,6 +659,49 @@ Respond with ONLY valid JSON, no markdown:
     );
   }
 
+  async function analyzeMake() {
+    if (!makeDesc.trim()) return;
+    setMakeLoading(true); setMakeError(null); setMakeResult(null);
+    const toolGuides = {
+      nano: "Google Gemini / Nano Banana — natural-language editing or generation instruction, specific about subject, style, composition, and what to preserve if a photo is attached.",
+      gpt: "DALL·E 3 / ChatGPT — rich natural-language paragraph, vivid and specific, full sentences.",
+      midjourney: "Midjourney v6 — subject → style → lighting → mood, end with --ar and --style raw.",
+      sd: "Stable Diffusion — comma-separated weighted tags ordered by importance, (key:1.2) emphasis.",
+    };
+    const content = [];
+    if (makePhoto) {
+      content.push({ type: "image", source: { type: "base64", media_type: makePhoto.mime, data: makePhoto.data } });
+    }
+    const sys = `You are an expert AI image prompt engineer. The user wants to create or transform an image. Your job: write the best possible prompt for their chosen tool.
+
+User's request (Korean): "${makeDesc}"
+Target tool: ${makeTool} — ${toolGuides[makeTool]}
+${makePhoto ? "A reference photo is attached. If the user wants to transform their own photo, incorporate it into the prompt." : "No photo attached — generate from scratch."}
+
+Analyze what the user wants, identify the style/mood/subject, and write an optimized prompt.
+Also suggest: which other tools might work well, and any tips.
+
+Respond with ONLY valid JSON, no markdown:
+{"prompt":"<optimized prompt>","tips":"<short Korean tip 1-2 sentences>","altTools":[{"tool":"","reason":""}]}`;
+    content.push({ type: "text", text: sys });
+    try {
+      const res = await fetch("https://promptlens-api.jaed-prompt.workers.dev", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 1500, messages: [{ role: "user", content }] }),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      let txt = (data.content || []).map((i) => i.text || "").join("\n").replace(/```json|```/g, "").trim();
+      const s = txt.indexOf("{"), e = txt.lastIndexOf("}");
+      if (s !== -1 && e !== -1) txt = txt.slice(s, e + 1);
+      setMakeResult(JSON.parse(txt));
+    } catch (err) {
+      setMakeError("생성에 실패했어요. 다시 시도해주세요.");
+    }
+    setMakeLoading(false);
+  }
+
   // ── 메인 화면 ──
   const tabBtn = (active) => ({
     flex: 1, fontSize: 13.5, fontWeight: 700, padding: "11px 0", cursor: "pointer", border: "none", borderRadius: 10,
@@ -676,7 +727,7 @@ Respond with ONLY valid JSON, no markdown:
 
         {/* 모드 탭 */}
         <div style={{ display: "flex", gap: 4, background: T.bg2, borderRadius: 13, padding: 4, marginBottom: 8, border: `1px solid ${T.cardLine}` }}>
-          {[["trend", "🔥 트렌드"], ["single", "단일"], ["ba", "비포/애프터"], ["video", "영상"]].map(([m, label]) => (
+          {[["trend", "🔥 트렌드"], ["single", "단일"], ["ba", "비포/애프터"], ["video", "영상"], ["make", "✨ 만들기"]].map(([m, label]) => (
             <button key={m} onClick={() => { setMode(m); setResult(null); setError(null); setNotice(null); }} style={tabBtn(mode === m)}>{label}</button>
           ))}
         </div>
@@ -684,12 +735,90 @@ Respond with ONLY valid JSON, no markdown:
           {mode === "trend" ? "요즘 핫한 변환 프롬프트를 골라 내 사진에 바로 적용하세요"
             : mode === "single" ? "결과 한 장 → 처음부터 만드는 프롬프트"
             : mode === "ba" ? "원본 + 결과 → 무엇을 어떻게 바꿨는지"
+            : mode === "make" ? "원하는 걸 말하면 → 최적화된 프롬프트를 만들어드려요"
             : "영상 → 비주얼 룩을 분석해 영상 프롬프트로 (베타)"}
         </p>
 
         {mode === "trend" && <TrendList cat={presetCat} setCat={setPresetCat} />}
 
-        {mode !== "trend" && (
+        {mode === "make" && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            {/* 왼쪽: 입력 */}
+            <div>
+              <div style={{ fontFamily: T.mono, fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: T.textDim, marginBottom: 8, fontWeight: 600 }}>어떤 이미지를 만들고 싶어요?</div>
+              <textarea
+                value={makeDesc}
+                onChange={(e) => setMakeDesc(e.target.value)}
+                placeholder={"예시:\n• 요즘 인스타에서 핫한 느낌으로 만들고 싶어\n• 내 사진을 프로필용으로 예쁘게 바꿔줘\n• 아기 사진을 동화 그림책 스타일로\n• 친구랑 찍은 사진을 영화 포스터처럼\n• 음식 사진을 감성있게 바꾸고 싶어"}
+                style={{ width: "100%", minHeight: 140, background: T.bg2, border: `1px solid ${T.cardLine}`, borderRadius: 12, padding: "14px", color: T.text, fontSize: 14, lineHeight: 1.7, resize: "vertical", fontFamily: "inherit", outline: "none" }}
+              />
+
+              <div style={{ fontFamily: T.mono, fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: T.textDim, margin: "16px 0 8px", fontWeight: 600 }}>사진 첨부 (선택)</div>
+              <div
+                onClick={() => makeFileRef.current.click()}
+                style={{ border: makePhoto ? `1px solid ${T.cardLine}` : `2px dashed ${T.cardLine}`, borderRadius: 12, background: T.bg2, padding: makePhoto ? 8 : "20px", textAlign: "center", cursor: "pointer" }}
+              >
+                {makePhoto
+                  ? <img src={makePhoto.preview} alt="" style={{ maxWidth: "100%", maxHeight: 160, borderRadius: 8, display: "block", margin: "0 auto" }} />
+                  : <div style={{ color: T.textFaint, fontSize: 13 }}>📎 내 사진 첨부 (변환할 때 참고해요)</div>
+                }
+              </div>
+              <input ref={makeFileRef} type="file" accept="image/*" hidden onChange={async (e) => { if (e.target.files[0]) { const out = await downscale(e.target.files[0]); setMakePhoto({ ...out, preview: "data:image/jpeg;base64," + out.data }); }}} />
+
+              <div style={{ fontFamily: T.mono, fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: T.textDim, margin: "16px 0 8px", fontWeight: 600 }}>어떤 툴 기준으로?</div>
+              <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                {Object.entries(TOOLS).map(([k, v]) => (
+                  <span key={k} onClick={() => setMakeTool(k)} style={{ ...toolBtn(makeTool === k) }}>{v.label}</span>
+                ))}
+              </div>
+
+              <button onClick={analyzeMake} disabled={!makeDesc.trim() || makeLoading}
+                style={{ width: "100%", marginTop: 18, padding: 15, border: "none", borderRadius: 14, fontSize: 15.5, fontWeight: 700, cursor: makeDesc.trim() && !makeLoading ? "pointer" : "not-allowed", background: makeDesc.trim() && !makeLoading ? T.spectrum : T.card, color: makeDesc.trim() && !makeLoading ? "#fff" : T.textFaint, boxShadow: makeDesc.trim() && !makeLoading ? "0 8px 26px rgba(255,46,151,0.3)" : "none" }}>
+                {makeLoading ? "프롬프트 만드는 중…" : "프롬프트 만들기 ✨"}
+              </button>
+            </div>
+
+            {/* 오른쪽: 결과 */}
+            <div style={{ background: T.card, border: `1px solid ${T.cardLine}`, borderRadius: 18, padding: 18, minHeight: 320 }}>
+              {makeError && <div style={{ background: "rgba(255,46,151,0.1)", border: `1px solid ${T.magenta}`, color: "#FF9CC4", padding: "13px 15px", borderRadius: 12, fontSize: 13 }}>{makeError}</div>}
+              {!makeResult && !makeError && !makeLoading && (
+                <div style={{ color: T.textFaint, fontSize: 13, textAlign: "center", padding: "70px 16px", lineHeight: 1.8 }}>
+                  <div style={{ fontSize: 40, marginBottom: 14 }}>✨</div>
+                  원하는 걸 왼쪽에 입력하면<br />최적화된 프롬프트를 만들어드려요
+                </div>
+              )}
+              {makeLoading && (
+                <div style={{ color: T.textDim, fontSize: 13, textAlign: "center", padding: "70px 16px", fontFamily: T.mono }}>
+                  원하는 스타일을 분석하는 중…
+                </div>
+              )}
+              {makeResult && (
+                <>
+                  <PromptCard label={`✨ ${TOOLS[makeTool].label} 프롬프트`} text={makeResult.prompt} accent={T.cyan} />
+                  {makeResult.tips && (
+                    <div style={{ marginTop: 16, padding: "12px 14px", background: T.bg2, borderRadius: 12, border: `1px solid ${T.cardLine}` }}>
+                      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.amber, letterSpacing: ".06em", textTransform: "uppercase", marginBottom: 5 }}>💡 팁</div>
+                      <div style={{ fontSize: 13, color: T.textDim, lineHeight: 1.6 }}>{makeResult.tips}</div>
+                    </div>
+                  )}
+                  {makeResult.altTools && makeResult.altTools.length > 0 && (
+                    <div style={{ marginTop: 14 }}>
+                      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.textFaint, letterSpacing: ".06em", textTransform: "uppercase", marginBottom: 8 }}>다른 툴도 잘 어울려요</div>
+                      {makeResult.altTools.map((a, i) => (
+                        <div key={i} style={{ display: "flex", gap: 10, padding: "8px 0", borderBottom: `1px dashed ${T.cardLine}`, fontSize: 13 }}>
+                          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.cyan, flexShrink: 0 }}>{TOOLS[a.tool]?.label || a.tool}</span>
+                          <span style={{ color: T.textDim }}>{a.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {mode !== "trend" && mode !== "make" && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           {/* 왼쪽: 입력 */}
           <div>
